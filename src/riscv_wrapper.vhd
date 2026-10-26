@@ -74,6 +74,94 @@ architecture rtl of riscv_wrapper is
     signal reset_sync_1        : std_logic := '0';
     signal reset_sync_2        : std_logic := '0';
 
+    -- picorv32_axi signal
+
+    component picorv32_axi is
+        generic (
+            ENABLE_COUNTERS       : integer := 1;
+            ENABLE_COUNTERS64     : integer := 1;
+            ENABLE_REGS_16_31     : integer := 1;
+            ENABLE_REGS_DUALPORT  : integer := 1;
+            TWO_STAGE_SHIFT       : integer := 1;
+            BARREL_SHIFTER        : integer := 0;
+            TWO_CYCLE_COMPARE     : integer := 0;
+            TWO_CYCLE_ALU         : integer := 0;
+            COMPRESSED_ISA        : integer := 0;
+            CATCH_MISALIGN        : integer := 1;
+            CATCH_ILLINSN         : integer := 1;
+            ENABLE_PCPI           : integer := 0;
+            ENABLE_MUL            : integer := 0;
+            ENABLE_FAST_MUL       : integer := 0;
+            ENABLE_DIV            : integer := 0;
+            ENABLE_IRQ            : integer := 0;
+            ENABLE_IRQ_QREGS      : integer := 1;
+            ENABLE_IRQ_TIMER      : integer := 1;
+            ENABLE_TRACE          : integer := 0;
+            REGS_INIT_ZERO        : integer := 0;
+
+            MASKED_IRQ            : std_logic_vector(31 downto 0)
+                                := x"00000000";
+            LATCHED_IRQ           : std_logic_vector(31 downto 0)
+                                := x"FFFFFFFF";
+            PROGADDR_RESET        : std_logic_vector(31 downto 0)
+                                := x"00000000";
+            PROGADDR_IRQ          : std_logic_vector(31 downto 0)
+                                := x"00000010";
+            STACKADDR             : std_logic_vector(31 downto 0)
+                                := x"FFFFFFFF"
+        );
+        port (
+            clk                   : in  std_logic;
+            resetn                : in  std_logic;
+            trap                  : out std_logic;
+
+            -- AXI4-Lite master write-address channel
+            mem_axi_awvalid       : out std_logic;
+            mem_axi_awready       : in  std_logic;
+            mem_axi_awaddr        : out std_logic_vector(31 downto 0);
+            mem_axi_awprot        : out std_logic_vector(2 downto 0);
+
+            -- AXI4-Lite master write-data channel
+            mem_axi_wvalid        : out std_logic;
+            mem_axi_wready        : in  std_logic;
+            mem_axi_wdata         : out std_logic_vector(31 downto 0);
+            mem_axi_wstrb         : out std_logic_vector(3 downto 0);
+
+            -- AXI4-Lite master write-response channel
+            mem_axi_bvalid        : in  std_logic;
+            mem_axi_bready        : out std_logic;
+
+            -- AXI4-Lite master read-address channel
+            mem_axi_arvalid       : out std_logic;
+            mem_axi_arready       : in  std_logic;
+            mem_axi_araddr        : out std_logic_vector(31 downto 0);
+            mem_axi_arprot        : out std_logic_vector(2 downto 0);
+
+            -- AXI4-Lite master read-data channel
+            mem_axi_rvalid        : in  std_logic;
+            mem_axi_rready        : out std_logic;
+            mem_axi_rdata         : in  std_logic_vector(31 downto 0);
+
+            -- Pico Co-Processor Interface
+            pcpi_valid            : out std_logic;
+            pcpi_insn             : out std_logic_vector(31 downto 0);
+            pcpi_rs1              : out std_logic_vector(31 downto 0);
+            pcpi_rs2              : out std_logic_vector(31 downto 0);
+            pcpi_wr               : in  std_logic;
+            pcpi_rd               : in  std_logic_vector(31 downto 0);
+            pcpi_wait             : in  std_logic;
+            pcpi_ready            : in  std_logic;
+
+            -- IRQ interface
+            irq                   : in  std_logic_vector(31 downto 0);
+            eoi                   : out std_logic_vector(31 downto 0);
+
+            -- Trace interface
+            trace_valid           : out std_logic;
+            trace_data            : out std_logic_vector(35 downto 0)
+        );
+    end component;
+
 begin
 
     --------------------------------------------------------------------
@@ -131,7 +219,7 @@ begin
     -- PicoRV32 AXI processor
     --------------------------------------------------------------------
 
-    picorv32_axi_inst : entity work.picorv32_axi
+    picorv32_axi_inst : picorv32_axi
         generic map (
             ENABLE_COUNTERS      => 1,
             ENABLE_COUNTERS64    => 1,

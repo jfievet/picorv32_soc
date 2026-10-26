@@ -13,7 +13,7 @@ add wave -noupdate -divider {axi_soc_subsystem_inst}
 add wave -position insertpoint sim:/soc_tb/soc_inst/*
 
 add wave -noupdate -divider {picorv32_axi_inst}
-add wave -position insertpoint sim:/soc_tb/soc_inst/picorv32_axi_inst/*
+add wave -position insertpoint sim:/soc_tb/soc_inst/riscv_wrapper_inst/picorv32_axi_inst/*
 
 add wave -noupdate -divider {axi_soc_subsystem_inst}
 add wave -position insertpoint sim:/soc_tb/soc_inst/axi_soc_subsystem_inst/*

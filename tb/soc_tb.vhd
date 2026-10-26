@@ -37,12 +37,312 @@ signal pc_debug_o        : std_logic_vector(31 downto 0);
 signal previous_pc_debug_o : std_logic_vector(31 downto 0);
 
 
---- UART signals
-signal byte_in      : std_logic_vector(7 downto 0) := (others => '0');
-signal byte_en_in   : std_logic := '0';
-signal byte_out     : std_logic_vector(7 downto 0);
-signal byte_en_out  : std_logic;
-signal busy_tx      : std_logic;
+-- AXI-Stream UART interface
+signal s_axis_tdata  : std_logic_vector(7 downto 0) := (others => '0');
+signal s_axis_tvalid : std_logic := '0';
+signal s_axis_tready : std_logic;
+signal m_axis_tdata  : std_logic_vector(7 downto 0);
+signal m_axis_tvalid : std_logic;
+signal m_axis_tready : std_logic := '1';
+
+-- Capture the latest received 9-byte bootloader ACK independently of TX.
+-- The test runner clears the count before each expected response.
+signal rx_frame_shift : std_logic_vector(71 downto 0) := (others => '0');
+signal rx_byte_count  : natural := 0;
+signal rx_clear       : std_logic := '0';
+
+-- External AXI4-Lite interface
+signal ext_axi_awaddr  : std_logic_vector(31 downto 0) := (others => '0');
+signal ext_axi_awprot  : std_logic_vector(2 downto 0)  := (others => '0');
+signal ext_axi_awvalid : std_logic := '0';
+signal ext_axi_awready : std_logic;
+
+signal ext_axi_wdata   : std_logic_vector(31 downto 0) := (others => '0');
+signal ext_axi_wstrb   : std_logic_vector(3 downto 0)  := (others => '0');
+signal ext_axi_wvalid  : std_logic := '0';
+signal ext_axi_wready  : std_logic;
+
+signal ext_axi_bresp   : std_logic_vector(1 downto 0);
+signal ext_axi_bvalid  : std_logic;
+signal ext_axi_bready  : std_logic := '0';
+
+signal ext_axi_araddr  : std_logic_vector(31 downto 0) := (others => '0');
+signal ext_axi_arprot  : std_logic_vector(2 downto 0)  := (others => '0');
+signal ext_axi_arvalid : std_logic := '0';
+signal ext_axi_arready : std_logic;
+
+signal ext_axi_rdata   : std_logic_vector(31 downto 0);
+signal ext_axi_rresp   : std_logic_vector(1 downto 0);
+signal ext_axi_rvalid  : std_logic;
+signal ext_axi_rready  : std_logic := '0';
+
+-- uart rx array
+type uart_rx_array_t is array (0 to 15) of std_logic_vector(7 downto 0);
+signal uart_rx_last16 : uart_rx_array_t := (others => (others => '0'));
+
+-- AXI-Stream write: hold TVALID and TDATA until a rising-edge handshake.
+procedure uart_write(
+    signal clock_i : in std_logic;
+    signal data_o  : out std_logic_vector(7 downto 0);
+    signal valid_o : out std_logic;
+    signal ready_i : in std_logic;
+    constant value : in std_logic_vector(7 downto 0)
+) is
+begin
+    wait until falling_edge(clock_i);
+    data_o  <= value;
+    valid_o <= '1';
+    loop
+        wait until rising_edge(clock_i);
+        exit when ready_i = '1';
+    end loop;
+    wait until falling_edge(clock_i);
+    valid_o <= '0';
+end procedure;
+
+procedure uart_send_frame(
+    signal clock_i : in std_logic;
+    signal data_o  : out std_logic_vector(7 downto 0);
+    signal valid_o : out std_logic;
+    signal ready_i : in std_logic;
+    constant frame : in std_logic_vector(71 downto 0)
+) is
+begin
+    for i in 0 to 8 loop
+        uart_write(clock_i, data_o, valid_o, ready_i,
+                   frame((i+1)*8-1 downto i*8));
+    end loop;
+end procedure;
+
+procedure axi_write(
+    signal clock_i   : in  std_logic;
+
+    signal awaddr_o  : out std_logic_vector(31 downto 0);
+    signal awvalid_o : out std_logic;
+    signal awready_i : in  std_logic;
+
+    signal wdata_o   : out std_logic_vector(31 downto 0);
+    signal wstrb_o   : out std_logic_vector(3 downto 0);
+    signal wvalid_o  : out std_logic;
+    signal wready_i  : in  std_logic;
+
+    signal bresp_i   : in  std_logic_vector(1 downto 0);
+    signal bvalid_i  : in  std_logic;
+    signal bready_o  : out std_logic;
+
+    constant addr    : in  std_logic_vector(31 downto 0);
+    constant data    : in  std_logic_vector(31 downto 0)
+) is
+    variable aw_done : boolean;
+    variable w_done  : boolean;
+begin
+
+    wait until falling_edge(clock_i);
+
+    awaddr_o  <= addr;
+    awvalid_o <= '1';
+
+    wdata_o   <= data;
+    wstrb_o   <= "1111";
+    wvalid_o  <= '1';
+
+    bready_o  <= '1';
+
+    aw_done := false;
+    w_done  := false;
+
+    -- AW and W are independent AXI-Lite channels.
+    while not (aw_done and w_done) loop
+
+        wait until rising_edge(clock_i);
+
+        if not aw_done and awready_i = '1' then
+            aw_done := true;
+            awvalid_o <= '0';
+        end if;
+
+        if not w_done and wready_i = '1' then
+            w_done := true;
+            wvalid_o <= '0';
+        end if;
+
+    end loop;
+
+    -- Wait for write response.
+    loop
+        wait until rising_edge(clock_i);
+        exit when bvalid_i = '1';
+    end loop;
+
+    check_equal(bresp_i, std_logic_vector'("00"),
+                "AXI-Lite WRITE BRESP");
+
+    wait until falling_edge(clock_i);
+
+    bready_o <= '0';
+
+end procedure;
+
+procedure axi_read(
+    signal clock_i   : in  std_logic;
+
+    signal araddr_o  : out std_logic_vector(31 downto 0);
+    signal arvalid_o : out std_logic;
+    signal arready_i : in  std_logic;
+
+    signal rdata_i   : in  std_logic_vector(31 downto 0);
+    signal rresp_i   : in  std_logic_vector(1 downto 0);
+    signal rvalid_i  : in  std_logic;
+    signal rready_o  : out std_logic;
+
+    constant addr    : in  std_logic_vector(31 downto 0);
+    variable data    : out std_logic_vector(31 downto 0)
+) is
+begin
+
+    wait until falling_edge(clock_i);
+
+    araddr_o  <= addr;
+    arvalid_o <= '1';
+
+    rready_o <= '1';
+
+    -- Wait for address acceptance.
+    loop
+        wait until rising_edge(clock_i);
+        exit when arready_i = '1';
+    end loop;
+
+    arvalid_o <= '0';
+
+    -- Wait for read response.
+    loop
+        wait until rising_edge(clock_i);
+        exit when rvalid_i = '1';
+    end loop;
+
+    data := rdata_i;
+
+    check_equal(rresp_i, std_logic_vector'("00"),
+                "AXI-Lite READ RRESP");
+
+    wait until falling_edge(clock_i);
+
+    rready_o <= '0';
+
+end procedure;
+
+---------------------------------------------------------------------------
+-- AXI4-Lite WRITE FROM TEXT FILE
+--
+-- File format:
+-- 00 10 01 17
+-- 00 01 01 13
+-- 00 00 02 97
+--
+-- Each line contains 4 hexadecimal bytes (MSB first).
+-- One AXI-Lite 32-bit write per line.
+-- Address increments by 4 after each write.
+---------------------------------------------------------------------------
+
+procedure axi_write_file(
+    signal clock_i   : in  std_logic;
+
+    signal awaddr_o  : out std_logic_vector(31 downto 0);
+    signal awvalid_o : out std_logic;
+    signal awready_i : in  std_logic;
+
+    signal wdata_o   : out std_logic_vector(31 downto 0);
+    signal wstrb_o   : out std_logic_vector(3 downto 0);
+    signal wvalid_o  : out std_logic;
+    signal wready_i  : in  std_logic;
+
+    signal bresp_i   : in  std_logic_vector(1 downto 0);
+    signal bvalid_i  : in  std_logic;
+    signal bready_o  : out std_logic;
+
+    constant start_addr : in std_logic_vector(31 downto 0);
+    constant filename   : in string
+) is
+
+    file fid : text;
+
+    variable v_line : line;
+
+    variable v_b3 : std_logic_vector(7 downto 0);
+    variable v_b2 : std_logic_vector(7 downto 0);
+    variable v_b1 : std_logic_vector(7 downto 0);
+    variable v_b0 : std_logic_vector(7 downto 0);
+
+    variable v_data : std_logic_vector(31 downto 0);
+    variable v_addr : unsigned(31 downto 0);
+
+    variable v_count : natural := 0;
+
+begin
+
+    -- Open file
+    
+    file_open(fid, filename, read_mode);
+
+    v_addr := unsigned(start_addr);
+
+    report "AXI FILE WRITE START: " & filename
+        severity note;
+
+    -- Read and write each line
+
+    while not endfile(fid) loop
+
+        readline(fid, v_line);
+
+        -- Read 4 hexadecimal bytes
+        hread(v_line, v_b3);
+        hread(v_line, v_b2);
+        hread(v_line, v_b1);
+        hread(v_line, v_b0);
+
+        -- Assemble 32-bit word (MSB first)
+        v_data := v_b3 & v_b2 & v_b1 & v_b0;
+
+        -- AXI-Lite write
+
+        axi_write(
+            clock_i,
+
+            awaddr_o,
+            awvalid_o,
+            awready_i,
+
+            wdata_o,
+            wstrb_o,
+            wvalid_o,
+            wready_i,
+
+            bresp_i,
+            bvalid_i,
+            bready_o,
+
+            std_logic_vector(v_addr),
+            v_data
+        );
+
+        -- Next 32-bit address
+        v_addr := v_addr + 4;
+
+        v_count := v_count + 1;
+
+    end loop;
+
+    -- Close file
+
+    file_close(fid);
+
+    report "AXI FILE WRITE COMPLETE: " &
+           integer'image(v_count) & " words written"
+        severity note;
+
+end procedure;
 
 function generate_frame(addr : std_logic_vector(31 downto 0); 
                        data : std_logic_vector(31 downto 0)) 
@@ -129,26 +429,30 @@ soc_inst : entity work.soc
         pc_debug_o          => pc_debug_o,
         previous_pc_debug_o => previous_pc_debug_o,
 
-        -- Disable the external AXI4-Lite initiator.
-        ext_axi_awvalid => '0',
-        ext_axi_awready => open,
-        ext_axi_awaddr  => (others => '0'),
-        ext_axi_awprot  => (others => '0'),
-        ext_axi_wvalid  => '0',
-        ext_axi_wready  => open,
-        ext_axi_wdata   => (others => '0'),
-        ext_axi_wstrb   => (others => '0'),
-        ext_axi_bvalid  => open,
-        ext_axi_bready  => '1',
-        ext_axi_arvalid => '0',
-        ext_axi_arready => open,
-        ext_axi_araddr  => (others => '0'),
-        ext_axi_arprot  => (others => '0'),
-        ext_axi_rvalid  => open,
-        ext_axi_rready  => '1',
-        ext_axi_rdata   => open,
-        ext_axi_bresp   => open,
-        ext_axi_rresp   => open
+        -- Axi lite AXI RAM direct access
+        ext_axi_awaddr  => ext_axi_awaddr,
+        ext_axi_awprot  => ext_axi_awprot,
+        ext_axi_awvalid => ext_axi_awvalid,
+        ext_axi_awready => ext_axi_awready,
+
+        ext_axi_wdata   => ext_axi_wdata,
+        ext_axi_wstrb   => ext_axi_wstrb,
+        ext_axi_wvalid  => ext_axi_wvalid,
+        ext_axi_wready  => ext_axi_wready,
+
+        ext_axi_bresp   => ext_axi_bresp,
+        ext_axi_bvalid  => ext_axi_bvalid,
+        ext_axi_bready  => ext_axi_bready,
+
+        ext_axi_araddr  => ext_axi_araddr,
+        ext_axi_arprot  => ext_axi_arprot,
+        ext_axi_arvalid => ext_axi_arvalid,
+        ext_axi_arready => ext_axi_arready,
+
+        ext_axi_rdata   => ext_axi_rdata,
+        ext_axi_rresp   => ext_axi_rresp,
+        ext_axi_rvalid  => ext_axi_rvalid,
+        ext_axi_rready  => ext_axi_rready
     );
 
 test_runner : process
@@ -158,6 +462,8 @@ variable v_INLINE                       : line;
 variable v_b3, v_b2, v_b1, v_b0         : std_logic_vector(7 downto 0);
 variable v_word                         : std_logic_vector(31 downto 0);
 variable v_cnt                          : std_logic_vector(31 downto 0):=x"00001000";
+variable v_uart_str                     : string(1 to 16);
+variable v_uart_hex                     : std_logic_vector(127 downto 0);
 begin
 test_runner_setup(runner, runner_cfg);
 
@@ -167,106 +473,120 @@ test_runner_setup(runner, runner_cfg);
         wait until rising_edge(reset_n);
         wait for 1 ms;
 
-        info("Wait 25 ms");
-        wait for 25 ms;
+        info("Wait 2 ms");
+        wait for 2 ms;
+
+        -- Display UART RX last 16 bytes in HEX
+        for i in 15 downto 0 loop
+            info("UART RX [" & integer'image(i) & "] = 0x" &
+                to_hstring(uart_rx_last16(i)));
+        end loop;
+
+        -- Checker
+        for i in 0 to 15 loop
+            v_uart_hex(i*8+7 downto i*8) := uart_rx_last16(i);
+        end loop;
+        check_equal(
+            v_uart_hex,
+            std_logic_vector'(x"746C6F61646572207265616479200D0A"),
+            "UART RX regression test"
+        );
+
+        info("Simulation finished"); 
 
     end if;
 
     if run("test_002_adder_program") then
 
+        info("Keep the riscv cpu in reset");
+        cpu_reset_i <= '1';
+
         -- Wait for reset to be released
         wait until rising_edge(reset_n);
         wait for 100 us;
 
-        info("Wait 12 ms");
-        wait for 12 ms;
+        info("Start AXI-Lite program upload");
+        axi_write_file(
+            clk,
+
+            ext_axi_awaddr,
+            ext_axi_awvalid,
+            ext_axi_awready,
+
+            ext_axi_wdata,
+            ext_axi_wstrb,
+            ext_axi_wvalid,
+            ext_axi_wready,
+
+            ext_axi_bresp,
+            ext_axi_bvalid,
+            ext_axi_bready,
+
+            x"00000000",       -- Start address
+            "../../../riscv_soc_shell/c/adder/ram_data.txt"   -- Program file
+        );
+        info("AXI-Lite program upload completed");
+
+        info("Release riscv cpu in reset");
+        cpu_reset_i <= '0';
+
+        info("Wait for the boot message to pass");
+        wait for 2.5 ms;
 
         info("Send 10");
         -- Send ASCII 1
-        byte_in    <= std_logic_vector(to_unsigned(49, 8));
-        byte_en_in <= '1';
-        wait until rising_edge(clk);
-        byte_en_in <= '0';
-        wait until rising_edge(clk);
-        while busy_tx = '1' loop
-            wait until rising_edge(clk);
-        end loop;
+
+        uart_write(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, std_logic_vector(to_unsigned(49, 8)));
 
         -- Send ASCII 0
-        byte_in    <= std_logic_vector(to_unsigned(48, 8));
-        byte_en_in <= '1';
-        wait until rising_edge(clk);
-        byte_en_in <= '0';
-        wait until rising_edge(clk);
-        while busy_tx = '1' loop
-            wait until rising_edge(clk);
-        end loop;
+
+        uart_write(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, std_logic_vector(to_unsigned(48, 8)));
 
         -- Send ASCII \r
-        byte_in    <= x"0D";
-        byte_en_in <= '1';
-        wait until rising_edge(clk);
-        byte_en_in <= '0';
-        wait until rising_edge(clk);
-        while busy_tx = '1' loop
-            wait until rising_edge(clk);
-        end loop;
+
+        uart_write(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, x"0D");
         
         -- Send ASCII \n
-        byte_in    <= x"0A";
-        byte_en_in <= '1';
-        wait until rising_edge(clk);
-        byte_en_in <= '0';
-        wait until rising_edge(clk);
-        while busy_tx = '1' loop
-            wait until rising_edge(clk);
-        end loop;
 
-        info("Wait 5 ms");
-        wait for 5 ms;
+        uart_write(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, x"0A");
+
+        info("Wait 1 ms");
+        wait for 1 ms;
 
         info("Send 11");
         -- Send ASCII 1
-        byte_in    <= std_logic_vector(to_unsigned(49, 8));
-        byte_en_in <= '1';
-        wait until rising_edge(clk);
-        byte_en_in <= '0';
-        wait until rising_edge(clk);
-        while busy_tx = '1' loop
-            wait until rising_edge(clk);
-        end loop;
+
+        uart_write(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, std_logic_vector(to_unsigned(49, 8)));
 
         -- Send ASCII 1
-        byte_in    <= std_logic_vector(to_unsigned(49, 8));
-        byte_en_in <= '1';
-        wait until rising_edge(clk);
-        byte_en_in <= '0';
-        wait until rising_edge(clk);
-        while busy_tx = '1' loop
-            wait until rising_edge(clk);
-        end loop;
+
+        uart_write(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, std_logic_vector(to_unsigned(49, 8)));
 
         -- Send ASCII \r
-        byte_in    <= x"0D";
-        byte_en_in <= '1';
-        wait until rising_edge(clk);
-        byte_en_in <= '0';
-        wait until rising_edge(clk);
-        while busy_tx = '1' loop
-            wait until rising_edge(clk);
-        end loop;
+
+        uart_write(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, x"0D");
         
         -- Send ASCII \n
-        byte_in    <= x"0A";
-        byte_en_in <= '1';
-        wait until rising_edge(clk);
-        byte_en_in <= '0';
-        wait until rising_edge(clk);
-        while busy_tx = '1' loop
-            wait until rising_edge(clk);
+
+        uart_write(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, x"0A");
+
+        wait for 1 ms;
+
+        -- Display UART RX last 16 bytes in HEX
+        for i in 15 downto 0 loop
+            info("UART RX [" & integer'image(i) & "] = 0x" &
+                to_hstring(uart_rx_last16(i)));
         end loop;
 
-        wait for 10 ms;
+        -- Checker
+        for i in 0 to 15 loop
+            v_uart_hex(i*8+7 downto i*8) := uart_rx_last16(i);
+        end loop;
+        check_equal(
+            v_uart_hex,
+            std_logic_vector'(x"0D0A0D0A456E74657220613A20200D0A"),
+            "UART RX regression test"
+        );
 
         info("Simulation finished");
 
@@ -278,8 +598,8 @@ test_runner_setup(runner, runner_cfg);
         wait until rising_edge(reset_n);
         wait for 100 us;
 
-        info("Wait 20 ms");
-        wait for 20 ms;
+        info("Wait 2 ms");
+        wait for 2 ms;
 
         info("-----------------------------------------------");
         info("Send a frame");
@@ -287,28 +607,19 @@ test_runner_setup(runner, runner_cfg);
         v_bootloader_frame := generate_frame(x"00000C00", x"12345678");
         wait for 0 ns;
 
-        for i in 0 to 8 loop
-            byte_in    <= v_bootloader_frame((i+1)*8-1 downto i*8);
-            byte_en_in <= '1';
-            wait until rising_edge(clk);
-            byte_en_in <= '0';
-            wait until rising_edge(clk);
-            while busy_tx = '1' loop
-                wait until rising_edge(clk);
-            end loop;
-        end loop;
+        rx_clear <= '1';
+        wait until rising_edge(clk);
+        wait until falling_edge(clk);
+        rx_clear <= '0';
+        uart_send_frame(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, v_bootloader_frame);
         info("Frame sent");
 
         info("ACK receive");
-        for i in 0 to 8 loop
-            info("Byte " & to_string(i) & " received");
-            wait until falling_edge(byte_en_out);
-            bootloader_rx_frame((i+1)*8-1 downto i*8)   <= byte_out;
-            wait for 0 ns;
-        end loop;
-        bootloader_rx_frame <= flip_bytes(bootloader_rx_frame);
+
+        wait until rx_byte_count = 9;
+        bootloader_rx_frame <= rx_frame_shift;
         wait for 0 ns;
-        check_equal(bootloader_rx_frame, std_logic_vector'(x"AA00000C0012345678"), "First frame ACK");
+        check_equal(bootloader_rx_frame, std_logic_vector'(x"78563412000C0000AA"), "First frame ACK");
 
         info("Wait 1 ms");
         wait for 1 ms;
@@ -319,53 +630,22 @@ test_runner_setup(runner, runner_cfg);
         v_bootloader_frame := generate_frame(x"00000C04", x"9abcdef1");
         wait for 0 ns;
 
-        for i in 0 to 8 loop
-            byte_in    <= v_bootloader_frame((i+1)*8-1 downto i*8);
-            byte_en_in <= '1';
-            wait until rising_edge(clk);
-            byte_en_in <= '0';
-            wait until rising_edge(clk);
-            while busy_tx = '1' loop
-                wait until rising_edge(clk);
-            end loop;
-        end loop;
+        rx_clear <= '1';
+        wait until rising_edge(clk);
+        wait until falling_edge(clk);
+        rx_clear <= '0';
+        uart_send_frame(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, v_bootloader_frame);
         info("Frame sent");
 
         info("ACK receive");
-        for i in 0 to 8 loop
-            info("Byte " & to_string(i) & " received");
-            wait until falling_edge(byte_en_out);
-            bootloader_rx_frame((i+1)*8-1 downto i*8)   <= byte_out;
-            wait for 0 ns;
-        end loop;
-        bootloader_rx_frame <= flip_bytes(bootloader_rx_frame);
+
+        wait until rx_byte_count = 9;
+        bootloader_rx_frame <= rx_frame_shift;
         wait for 0 ns;
-        check_equal(bootloader_rx_frame, std_logic_vector'(x"AA00000C049abcdef1"), "Second frame ACK");
+        check_equal(bootloader_rx_frame, std_logic_vector'(x"F1DEBC9A040C0000AA"), "Second frame ACK");
 
         info("Wait 1 ms");
         wait for 1 ms;
-
---        info("-----------------------------------------------");
---        info("Send a frame for app jump");
---        info("-----------------------------------------------");
---
---        v_bootloader_frame := generate_jump_frame(x"00000000", x"00000000");
---        wait for 0 ns;
---
---        for i in 0 to 8 loop
---            byte_in    <= v_bootloader_frame((i+1)*8-1 downto i*8);
---            byte_en_in <= '1';
---            wait until rising_edge(clk);
---            byte_en_in <= '0';
---            wait until rising_edge(clk);
---            while busy_tx = '1' loop
---                wait until rising_edge(clk);
---            end loop;
---        end loop;
---        info("Frame sent");
---
---        info("Wait 1 ms");
---        wait for 1 ms;
 
         info("Simulation finished");
 
@@ -378,10 +658,14 @@ test_runner_setup(runner, runner_cfg);
         wait for 100 us;
 
         info("Open files");
-        file_open(fid_file_in, "../../../c/bootloader_AND_gpio_write_loop/ram_data.txt",  read_mode);
+        file_open(fid_file_in, "../../../riscv_soc_shell/c/bootloader_AND_gpio_write_loop/ram_data.txt",  read_mode);
 
         info("Wait 1.5 ms");
         wait for 1.5 ms;
+
+        info("------------------------------------------------------");
+        info("This test lasts 151 ms at 100 Mhz and 781248 bps uart");
+        info("------------------------------------------------------");
 
         info("-----------------------------------------------");
         info("Start to send app");
@@ -408,27 +692,18 @@ test_runner_setup(runner, runner_cfg);
             v_cnt := std_logic_vector(unsigned(v_cnt)+4);
             wait for 0 ns;
 
-            for i in 0 to 8 loop
-                byte_in    <= v_bootloader_frame((i+1)*8-1 downto i*8);
-                byte_en_in <= '1';
-                wait until rising_edge(clk);
-                byte_en_in <= '0';
-                wait until rising_edge(clk);
-                while busy_tx = '1' loop
-                    wait until rising_edge(clk);
-                end loop;
-            end loop;
+        rx_clear <= '1';
+        wait until rising_edge(clk);
+        wait until falling_edge(clk);
+        rx_clear <= '0';
+        uart_send_frame(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, v_bootloader_frame);
             info("Frame sent");
 
             info("ACK receive");
-            for i in 0 to 8 loop
-                info("Byte " & to_string(i) & " received");
-                wait until falling_edge(byte_en_out);
-                bootloader_rx_frame((i+1)*8-1 downto i*8)   <= byte_out;
-                wait for 0 ns;
-            end loop;
-            bootloader_rx_frame <= flip_bytes(bootloader_rx_frame);
-            wait for 0 ns;
+
+        wait until rx_byte_count = 9;
+        bootloader_rx_frame <= rx_frame_shift;
+        wait for 0 ns;
 
             info("Wait 0.125 ms");
             wait for 0.125 ms;
@@ -439,33 +714,41 @@ test_runner_setup(runner, runner_cfg);
         info("Generate the jump frame");
         v_bootloader_frame := generate_jump_frame(v_cnt, data_read_from_file);
         wait for 0 ns;
-        
-        for i in 0 to 8 loop
-            byte_in    <= v_bootloader_frame((i+1)*8-1 downto i*8);
-            byte_en_in <= '1';
-            wait until rising_edge(clk);
-            byte_en_in <= '0';
-            wait until rising_edge(clk);
-            while busy_tx = '1' loop
-                wait until rising_edge(clk);
-            end loop;
-        end loop;
+
+        rx_clear <= '1';
+        wait until rising_edge(clk);
+        wait until falling_edge(clk);
+        rx_clear <= '0';
+        uart_send_frame(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, v_bootloader_frame);
         info("Jump frame sent");
 
         info("Wait for bootloader prompt and send 'y' to jump");
         wait for 1 ms;
-        byte_in    <= x"79";  -- ASCII 'y'
-        byte_en_in <= '1';
-        wait until rising_edge(clk);
-        byte_en_in <= '0';
-        wait until rising_edge(clk);
-        while busy_tx = '1' loop
-            wait until rising_edge(clk);
-        end loop;
+        uart_write(clk, s_axis_tdata, s_axis_tvalid, s_axis_tready, x"79");
         info("'y' sent to bootloader");
 
         info("Wait 5 ms");
         wait for 5 ms;
+
+        -- Display UART RX last 16 bytes in HEX
+        for i in 15 downto 0 loop
+            info("UART RX [" & integer'image(i) & "] = 0x" &
+                to_hstring(uart_rx_last16(i)));
+        end loop;
+
+        info("The following checker will work only if timing sequencement keeps aligned");
+
+        -- Checker
+        for i in 0 to 15 loop
+            v_uart_hex(i*8+7 downto i*8) := uart_rx_last16(i);
+        end loop;
+
+        check_equal(
+            v_uart_hex,
+            std_logic_vector'(x"75653A20250A56616C75653A20250A56"),
+            "UART RX regression test"
+        );
+
         info("Simulation finished");
 
     end if;
@@ -475,19 +758,41 @@ end process;
 
 uart_inst : entity work.uart
     generic map (
-        G_SYS_FREQ => C_SYS_FREQ,
-        G_BAUD     => C_BAUDRATE
+        use_async_reset    => true,
+        use_sync_reset     => false,
+        async_reset_active => '1',
+        uart_clock_divider => (C_SYS_FREQ + 4*C_BAUDRATE) / (8*C_BAUDRATE)
     )
     port map (
-        clk         => clk,
-        byte_in     => byte_in,
-        byte_en_in  => byte_en_in,
-        uart_rx     => uart_tx,
-        byte_out    => byte_out,
-        byte_en_out => byte_en_out,
-        busy_tx     => busy_tx,
-        uart_tx     => uart_rx
-);
+        clock         => clk,
+        async_reset   => not reset_n,
+        sync_reset    => '0',
+        s_axis_tdata  => s_axis_tdata,
+        s_axis_tvalid => s_axis_tvalid,
+        s_axis_tready => s_axis_tready,
+        m_axis_tdata  => m_axis_tdata,
+        m_axis_tvalid => m_axis_tvalid,
+        m_axis_tready => m_axis_tready,
+        tx_en         => open,
+        txd           => uart_rx,
+        rxd           => uart_tx
+    );
+
+-- A single RX process owns the ACK capture. The monitor below only observes.
+uart_ack_capture_pr : process(clk)
+begin
+    if rising_edge(clk) then
+        if reset_n = '0' or rx_clear = '1' then
+            rx_byte_count  <= 0;
+            rx_frame_shift <= (others => '0');
+        elsif m_axis_tvalid = '1' and m_axis_tready = '1' then
+            if rx_byte_count < 9 then
+                rx_frame_shift <= m_axis_tdata & rx_frame_shift(71 downto 8);
+                rx_byte_count  <= rx_byte_count + 1;
+            end if;
+        end if;
+    end if;
+end process;
 
 uart_monitor_pr : process
 -- This process monitors UART output and displays it as a console.
@@ -498,8 +803,8 @@ begin
     wait until rising_edge(clk);
     while true loop
         wait until rising_edge(clk);
-        if byte_en_out = '1' then
-            char_val := character'val(to_integer(unsigned(byte_out)));
+        if m_axis_tvalid = '1' and m_axis_tready = '1' then
+            char_val := character'val(to_integer(unsigned(m_axis_tdata)));
             if char_val = LF or char_val = CR then
                 -- Print the current line and reset buffer
                 if idx > 1 then
@@ -514,6 +819,24 @@ begin
             end if;
         end if;
     end loop;
+end process;
+
+uart_rx_shift_pr : process(clk)
+begin
+    if rising_edge(clk) then
+        if reset_n = '0' then
+            uart_rx_last16 <= (others => (others => '0'));
+
+        elsif m_axis_tvalid = '1' and m_axis_tready = '1' then
+
+            for i in 15 downto 1 loop
+                uart_rx_last16(i) <= uart_rx_last16(i-1);
+            end loop;
+
+            uart_rx_last16(0) <= m_axis_tdata;
+
+        end if;
+    end if;
 end process;
 
 
