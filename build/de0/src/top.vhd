@@ -56,28 +56,51 @@ architecture rtl of top is
     signal nco_clock_top       : std_logic;
 
     --------------------------------------------------------
-    --Integration signals
+    --SOC signals
     --------------------------------------------------------
-    signal top_axi_awvalid : std_logic;
+    -- AXI4-Lite external initiator
+    signal top_axi_awvalid : std_logic := '0';
     signal top_axi_awready : std_logic;
-    signal top_axi_awaddr  : std_logic_vector(31 downto 0);
-    signal top_axi_wvalid  : std_logic;
+    signal top_axi_awaddr  : std_logic_vector(31 downto 0) := (others => '0');
+    signal top_axi_awprot  : std_logic_vector(2 downto 0)  := (others => '0');
+
+    signal top_axi_wvalid  : std_logic := '0';
     signal top_axi_wready  : std_logic;
-    signal top_axi_wdata   : std_logic_vector(31 downto 0);
-    signal top_axi_wstrb   : std_logic_vector(3 downto 0);
+    signal top_axi_wdata   : std_logic_vector(31 downto 0) := (others => '0');
+    signal top_axi_wstrb   : std_logic_vector(3 downto 0)  := (others => '0');
+
     signal top_axi_bvalid  : std_logic;
-    signal top_axi_bready  : std_logic;
+    signal top_axi_bready  : std_logic := '0';
     signal top_axi_bresp   : std_logic_vector(1 downto 0);
-    signal top_axi_arvalid : std_logic;
+
+    signal top_axi_arvalid : std_logic := '0';
     signal top_axi_arready : std_logic;
-    signal top_axi_araddr  : std_logic_vector(31 downto 0);
+    signal top_axi_araddr  : std_logic_vector(31 downto 0) := (others => '0');
+    signal top_axi_arprot  : std_logic_vector(2 downto 0)  := (others => '0');
+
     signal top_axi_rvalid  : std_logic;
-    signal top_axi_rready  : std_logic;
+    signal top_axi_rready  : std_logic := '0';
     signal top_axi_rdata   : std_logic_vector(31 downto 0);
     signal top_axi_rresp   : std_logic_vector(1 downto 0);
-    signal uart_rxd_d1     : std_logic;
-    signal uart_rxd_d2     : std_logic;
-    signal soft_reset      : std_logic;
+
+    -- CPU control and debug
+    signal soc_cpu_reset   : std_logic := '0';
+    signal soc_stall       : std_logic := '0';
+    signal soc_fault_i     : std_logic := '0';
+    signal soc_fault_o     : std_logic;
+
+    signal soc_registers_debug   : std_logic_vector(1023 downto 0);
+    signal soc_pc_debug          : std_logic_vector(31 downto 0);
+    signal soc_previous_pc_debug : std_logic_vector(31 downto 0);
+
+    --------------------------------------------------------
+    -- Misc signals
+    --------------------------------------------------------
+    -- UART synchronization
+    signal uart_rxd_d1 : std_logic := '1';
+    signal uart_rxd_d2 : std_logic := '1';
+
+    signal soft_reset : std_logic;
 
 begin
     rst <= SW(0);
@@ -129,70 +152,113 @@ nco_pro : process (clk_main, rst_main)
     --------------------------------------------------------
     -- SOC
     --------------------------------------------------------
-
     soc_inst : entity work.soc
         generic map (
-            G_SYS_FREQ  => clock_frequency,
-            G_BAUDRATE          => uart_baudrate
-            --start_address     => x"00000000",
-            --enable_multiplier => false,
-            --enable_divider    => false
+            G_SYS_FREQ => clock_frequency,
+            G_BAUDRATE => uart_baudrate
         )
         port map (
-            clock_i             => clk_main,
-            reset_n_i           => rst_n_main,
+            -- Clock and reset
+            clk         => clk_main,
+            reset_n     => rst_n_main,
+            cpu_reset_i => soc_cpu_reset,
 
-            uart_rx_i           => uart_rxd_d2,
-            uart_tx_o           => GPIO0_D_0,
+            -- UART
+            uart_rx     => uart_rxd_d2,
+            uart_tx     => GPIO0_D_0,
 
-            gpio_i              => (others => '0'),
-            gpio_o              => soc_gpio_o,
+            -- CPU control
+            stall_i     => soc_stall,
+            fault_i     => soc_fault_i,
+            fault_o     => soc_fault_o,
 
-            stall_i             => '0',
-            fault_i             => '0',
-            fault_o             => soc_fault,
+            -- CPU debug
+            registers_debug_o   => soc_registers_debug,
+            pc_debug_o          => soc_pc_debug,
+            previous_pc_debug_o => soc_previous_pc_debug,
 
-            registers_debug_o   => open,
-            pc_debug_o          => open,
-            previous_pc_debug_o => open,
+            -- AXI4-Lite write address
+            ext_axi_awvalid => top_axi_awvalid,
+            ext_axi_awready => top_axi_awready,
+            ext_axi_awaddr  => top_axi_awaddr,
+            ext_axi_awprot  => top_axi_awprot,
 
-            cpu_sync_reset_i    => '0',
+            -- AXI4-Lite write data
+            ext_axi_wvalid  => top_axi_wvalid,
+            ext_axi_wready  => top_axi_wready,
+            ext_axi_wdata   => top_axi_wdata,
+            ext_axi_wstrb   => top_axi_wstrb,
 
-            tb_axi_awaddr_i     => (others => '0'),
-            tb_axi_awprot_i     => (others => '0'),
-            tb_axi_awvalid_i    => '0',
-            tb_axi_awready_o    => open,
+            -- AXI4-Lite write response
+            ext_axi_bvalid  => top_axi_bvalid,
+            ext_axi_bready  => top_axi_bready,
+            ext_axi_bresp   => top_axi_bresp,
 
-            tb_axi_wdata_i      => (others => '0'),
-            tb_axi_wstrb_i      => (others => '0'),
-            tb_axi_wvalid_i     => '0',
-            tb_axi_wready_o     => open,
+            -- AXI4-Lite read address
+            ext_axi_arvalid => top_axi_arvalid,
+            ext_axi_arready => top_axi_arready,
+            ext_axi_araddr  => top_axi_araddr,
+            ext_axi_arprot  => top_axi_arprot,
 
-            tb_axi_bresp_o      => open,
-            tb_axi_bvalid_o     => open,
-            tb_axi_bready_i     => '0',
-
-            tb_axi_araddr_i     => (others => '0'),
-            tb_axi_arprot_i     => (others => '0'),
-            tb_axi_arvalid_i    => '0',
-            tb_axi_arready_o    => open,
-
-            tb_axi_rdata_o      => open,
-            tb_axi_rresp_o      => open,
-            tb_axi_rvalid_o     => open,
-            tb_axi_rready_i     => '0'
+            -- AXI4-Lite read data
+            ext_axi_rvalid  => top_axi_rvalid,
+            ext_axi_rready  => top_axi_rready,
+            ext_axi_rdata   => top_axi_rdata,
+            ext_axi_rresp   => top_axi_rresp
         );
 
+    --------------------------------------------------------
+    -- SOC control
+    --------------------------------------------------------
+
+    soc_cpu_reset <= '0';
+    soc_stall     <= '0';
+    soc_fault_i   <= '0';
+
+    --------------------------------------------------------
+    -- AXI4-Lite external initiator
+    --------------------------------------------------------
+
+    -- Write address
+    top_axi_awvalid <= '0';
+    top_axi_awaddr  <= (others => '0');
+    top_axi_awprot  <= (others => '0');
+
+    -- Write data
+    top_axi_wvalid  <= '0';
+    top_axi_wdata   <= (others => '0');
+    top_axi_wstrb   <= (others => '0');
+
+    -- Write response
+    top_axi_bready  <= '0';
+
+    -- Read address
+    top_axi_arvalid <= '0';
+    top_axi_araddr  <= (others => '0');
+    top_axi_arprot  <= (others => '0');
+
+    -- Read data
+    top_axi_rready  <= '0';
+
     -- UART assignments
-sync_pr : process (clk_main, rst_main)
-        begin
+    sync_pr : process(clk_main, rst_main)
+    begin
         if (rst_main = '1' and USE_ASYNC_RESET = TRUE) then
             uart_rxd_d1 <= '1';
-        uart_rxd_d2 <= '1';
-            elsif rising_edge(clk_main) then
-            uart_rxd_d1 <= GPIO0_D_1;
-        uart_rxd_d2 <= uart_rxd_d1;
+            uart_rxd_d2 <= '1';
+
+        elsif rising_edge(clk_main) then
+
+            if (rst_main = '1' and USE_SYNC_RESET = TRUE) then
+                uart_rxd_d1 <= '1';
+                uart_rxd_d2 <= '1';
+
+            else
+                uart_rxd_d1 <= GPIO0_D_1;
+                uart_rxd_d2 <= uart_rxd_d1;
+            end if;
+
         end if;
-        end process;
+    end process;
         
 end rtl;
