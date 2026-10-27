@@ -7,6 +7,21 @@ set "PROJECT=top"
 set "REVISION=top"
 
 rem -----------------------------------------
+rem Navigate timestamp script
+rem -----------------------------------------
+cd ..
+cd ..
+cd riscv_soc_shell
+cd rtl_common
+cd script
+python generate_timestamp_pkg.py
+cd ..
+cd ..
+cd ..
+cd build
+cd de0
+
+rem -----------------------------------------
 rem Navigate to Quartus project
 rem -----------------------------------------
 

@@ -4,10 +4,10 @@ use ieee.numeric_std.all;
 
 entity riscv_wrapper is
     generic (
-        use_async_reset    : boolean := true;
-        use_sync_reset     : boolean := true;
-        async_reset_active : std_logic := '1';
-        sync_reset_active  : std_logic := '1';
+        USE_ASYNC_RESET    : boolean   := TRUE;
+        USE_SYNC_RESET     : boolean   := TRUE;
+        ASYNC_RESET_ACTIVE : std_logic := '1';
+        SYNC_RESET_ACTIVE  : std_logic := '1';
         start_address      : std_logic_vector(31 downto 0) := x"00000000";
         enable_multiplier  : boolean := true;
         enable_divider     : boolean := true
@@ -15,8 +15,8 @@ entity riscv_wrapper is
     port (
         -- Clock and reset
         clock_i       : in std_logic;
-        async_reset_i : in std_logic;
-        sync_reset_i  : in std_logic;
+        async_reset : in std_logic;
+        sync_reset  : in std_logic;
 
         -- CPU control
         stall_i : in std_logic;
@@ -170,28 +170,32 @@ begin
 
     -- Decode reset polarity and enable
     async_reset_request <= '1' when
-        use_async_reset and async_reset_i = async_reset_active
+        USE_ASYNC_RESET and async_reset = ASYNC_RESET_ACTIVE
         else '0';
 
     sync_reset_request <= '1' when
-        use_sync_reset and sync_reset_i = sync_reset_active
+        USE_SYNC_RESET and sync_reset = SYNC_RESET_ACTIVE
         else '0';
 
     -- Asynchronous assertion, synchronous release
-    process(clock_i, async_reset_request)
+    process (clock_i, async_reset) is
     begin
-        if async_reset_request = '1' then
+        if ((async_reset = ASYNC_RESET_ACTIVE) and (USE_ASYNC_RESET = true)) then
             reset_sync_1 <= '0';
             reset_sync_2 <= '0';
-
         elsif rising_edge(clock_i) then
-            reset_sync_1 <= '1';
-            reset_sync_2 <= reset_sync_1;
+            if ((sync_reset = SYNC_RESET_ACTIVE) and (USE_SYNC_RESET = true)) then
+                reset_sync_1 <= '0';
+                reset_sync_2 <= '0';
+            else
+                reset_sync_1 <= '1';
+                reset_sync_2 <= reset_sync_1;
+            end if;
         end if;
     end process;
 
     -- Generate active-low CPU reset
-    reset_n <= reset_sync_2 and not sync_reset_request;
+    reset_n <= reset_sync_2 and not sync_reset_request when USE_ASYNC_RESET or USE_SYNC_RESET else '1';
 
 
     --------------------------------------------------------------------

@@ -10,20 +10,29 @@ library vunit_lib;
 context vunit_lib.vunit_context;
 
 entity soc_tb is
-    generic (runner_cfg : string := runner_cfg_default);
+    generic (
+        runner_cfg         : string := runner_cfg_default
+    );
 end soc_tb;
 
 architecture rtl of soc_tb is
 
 constant C_SYS_FREQ : natural := 100_000_000;
 constant C_BAUDRATE : natural := 781248;
+constant USE_ASYNC_RESET    : boolean   := FALSE;
+constant USE_SYNC_RESET     : boolean   := TRUE;
+constant ASYNC_RESET_ACTIVE : std_logic := '1';
+constant SYNC_RESET_ACTIVE  : std_logic := '1';
 
 constant clk_const      : time := 5 ns;
 constant reset_n_const  : time := 83.334 ns;
 
 -- DUT signals
 signal clk          : std_logic;
-signal reset_n      : std_logic:='0';
+-- Startup completion indicator for the test runner and receive monitors.
+signal reset_n      : std_logic := '0';
+signal async_reset  : std_logic := ASYNC_RESET_ACTIVE;
+signal sync_reset   : std_logic := SYNC_RESET_ACTIVE;
 signal uart_rx      : std_logic;
 signal uart_tx      : std_logic;
 
@@ -398,10 +407,22 @@ end process;
 -----------------------------------------
 -- reset_n generation
 -----------------------------------------
-reset_n_gen_pr:process
+reset_n_gen_pr: process
 begin
     reset_n <= '0';
+    async_reset <= ASYNC_RESET_ACTIVE;
+    sync_reset <= SYNC_RESET_ACTIVE;
     wait for reset_n_const;
+    wait until falling_edge(clk);
+    async_reset <= not ASYNC_RESET_ACTIVE;
+    sync_reset <= not SYNC_RESET_ACTIVE;
+
+    -- Allow the CPU reset release synchronizer to settle before starting tests.
+    -- Complete startup even when both configurable resets are disabled.
+    for i in 1 to 3 loop
+        wait until rising_edge(clk);
+    end loop;
+    wait until falling_edge(clk);
     reset_n <= '1';
     wait;
 end process;
@@ -410,13 +431,18 @@ end process;
 -- Instantiate the SoC; keep the external AXI master idle.
 soc_inst : entity work.soc
     generic map (
+        USE_ASYNC_RESET    => USE_ASYNC_RESET,
+        USE_SYNC_RESET     => USE_SYNC_RESET,
+        ASYNC_RESET_ACTIVE => ASYNC_RESET_ACTIVE,
+        SYNC_RESET_ACTIVE  => SYNC_RESET_ACTIVE,
         G_SYS_FREQ => C_SYS_FREQ,
         G_BAUDRATE => C_BAUDRATE
     )
     port map (
         -- Clock, reset and UART
         clk         => clk,
-        reset_n     => reset_n,
+        async_reset => async_reset,
+        sync_reset  => sync_reset,
         cpu_reset_i => cpu_reset_i,
         uart_rx     => uart_rx,
         uart_tx     => uart_tx,
@@ -758,15 +784,16 @@ end process;
 
 uart_inst : entity work.uart
     generic map (
-        use_async_reset    => true,
-        use_sync_reset     => false,
-        async_reset_active => '1',
+        USE_ASYNC_RESET    => USE_ASYNC_RESET,
+        USE_SYNC_RESET     => USE_SYNC_RESET,
+        ASYNC_RESET_ACTIVE => ASYNC_RESET_ACTIVE,
+        SYNC_RESET_ACTIVE  => SYNC_RESET_ACTIVE,
         uart_clock_divider => (C_SYS_FREQ + 4*C_BAUDRATE) / (8*C_BAUDRATE)
     )
     port map (
         clock         => clk,
-        async_reset   => not reset_n,
-        sync_reset    => '0',
+        async_reset   => async_reset,
+        sync_reset    => sync_reset,
         s_axis_tdata  => s_axis_tdata,
         s_axis_tvalid => s_axis_tvalid,
         s_axis_tready => s_axis_tready,

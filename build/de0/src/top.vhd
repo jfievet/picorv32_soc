@@ -32,6 +32,13 @@ end entity top;
 
 architecture rtl of top is
 
+    constant USE_ASYNC_RESET    : boolean   := FALSE;
+    constant USE_SYNC_RESET     : boolean   := TRUE;
+    constant ASYNC_RESET_ACTIVE : std_logic := '1';
+    constant SYNC_RESET_ACTIVE  : std_logic := '1';
+    constant clock_frequency    : natural := 100_000_000;
+    constant uart_baudrate      : natural := 250_000;
+
     --------------------------------------------------------
     -- Global
     --------------------------------------------------------
@@ -99,7 +106,6 @@ architecture rtl of top is
 
 begin
     rst <= SW(0);
-
     --------------------------------------------------------
     -- Clock and reset generation
     --------------------------------------------------------
@@ -123,21 +129,21 @@ begin
     --------------------------------------------------------
 nco_pro : process (clk_main, rst_main)
         begin
-        if (rst_main = '1' and USE_ASYNC_RESET = TRUE) then
+        if (rst_main = '1') then
             nco_accu      <= (others => '0');
             nco_clock     <= '0';
             nco_clock_d1  <= '0';
             nco_clock_top <= '0';
-        nco_accu_incr <= nco_accu_incr_const;
+            nco_accu_incr <= nco_accu_incr_const;
             elsif rising_edge(clk_main) then
             nco_accu     <= nco_accu + nco_accu_incr;
-            nco_clock    <= nco_accu(31);
-            nco_clock_d1 <= nco_clock;
+                nco_clock    <= nco_accu(31);
+                nco_clock_d1 <= nco_clock;
             if nco_clock = '1' and nco_clock_d1 = '0' then
-            nco_clock_top <= not(nco_clock_top);
+                nco_clock_top <= not(nco_clock_top);
             end if;
         end if;
-        end process;
+    end process;
 
     --------------------------------------------------------
     --Outputs
@@ -149,14 +155,20 @@ nco_pro : process (clk_main, rst_main)
     --------------------------------------------------------
     soc_inst : entity work.soc
         generic map (
+            USE_ASYNC_RESET    => USE_ASYNC_RESET,
+            USE_SYNC_RESET     => USE_SYNC_RESET,
+            ASYNC_RESET_ACTIVE => ASYNC_RESET_ACTIVE,
+            SYNC_RESET_ACTIVE  => SYNC_RESET_ACTIVE,
             G_SYS_FREQ => clock_frequency,
             G_BAUDRATE => uart_baudrate
         )
         port map (
             -- Clock and reset
             clk         => clk_main,
-            reset_n     => rst_n_main,
-            cpu_reset_i => not(rst_n_main),
+            async_reset => '0',
+            sync_reset  => rst_main,
+
+            cpu_reset_i => rst_main,
 
             -- UART
             uart_rx     => uart_rxd_d2,
@@ -236,23 +248,14 @@ nco_pro : process (clk_main, rst_main)
     top_axi_rready  <= '0';
 
     -- UART assignments
-    sync_pr : process(clk_main, rst_main)
+    sync_pr : process (clk_main, rst_main)
     begin
-        if (rst_main = '1' and USE_ASYNC_RESET = TRUE) then
+        if (rst_main='1')  then
             uart_rxd_d1 <= '1';
             uart_rxd_d2 <= '1';
-
         elsif rising_edge(clk_main) then
-
-            if (rst_main = '1' and USE_SYNC_RESET = TRUE) then
-                uart_rxd_d1 <= '1';
-                uart_rxd_d2 <= '1';
-
-            else
-                uart_rxd_d1 <= GPIO0_D_1;
-                uart_rxd_d2 <= uart_rxd_d1;
-            end if;
-
+            uart_rxd_d1 <= GPIO0_D_1;
+            uart_rxd_d2 <= uart_rxd_d1;
         end if;
     end process;
         
