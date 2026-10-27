@@ -71,8 +71,8 @@ architecture rtl of riscv_wrapper is
     -- Reset synchronization
     signal async_reset_request : std_logic;
     signal sync_reset_request  : std_logic;
-    signal reset_sync_1        : std_logic := '0';
-    signal reset_sync_2        : std_logic := '0';
+    signal reset_sync_1        : std_logic;
+    signal reset_sync_2        : std_logic;
 
     -- picorv32_axi signal
 
