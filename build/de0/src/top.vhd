@@ -161,7 +161,7 @@ nco_pro : process (clk_main, rst_main)
             -- Clock and reset
             clk         => clk_main,
             reset_n     => rst_n_main,
-            cpu_reset_i => soc_cpu_reset,
+            cpu_reset_i => not(rst_n_main),
 
             -- UART
             uart_rx     => uart_rxd_d2,
