@@ -31,24 +31,19 @@ entity top is
 end entity top;
 
 architecture rtl of top is
+
     --------------------------------------------------------
-    --Integration design constants
-    --------------------------------------------------------
-    constant clock_frequency : natural := 100_000_000;
-    constant uart_baudrate   : natural := 250_000;
-    constant USE_ASYNC_RESET    : boolean   := FALSE;
-    constant USE_SYNC_RESET     : boolean   := FALSE;
-    --------------------------------------------------------
-    --Global
+    -- Global
     --------------------------------------------------------
     signal rst        : std_logic;
     signal clk_main   : std_logic;
     signal rst_main   : std_logic;
     signal rst_n_main : std_logic;
+
     --------------------------------------------------------
-    --NCO generation signals
+    -- NCO generation signals
     --------------------------------------------------------
-    signal nco_accu            : unsigned(31 downto 0) := (others => '0');
+    signal nco_accu            : unsigned(31 downto 0);
     signal nco_accu_incr_const : unsigned(31 downto 0) := to_unsigned(43, 32);
     signal nco_accu_incr       : unsigned(31 downto 0) := nco_accu_incr_const;
     signal nco_clock           : std_logic;
@@ -56,37 +51,37 @@ architecture rtl of top is
     signal nco_clock_top       : std_logic;
 
     --------------------------------------------------------
-    --SOC signals
+    -- SOC signals
     --------------------------------------------------------
     -- AXI4-Lite external initiator
-    signal top_axi_awvalid : std_logic := '0';
+    signal top_axi_awvalid : std_logic;
     signal top_axi_awready : std_logic;
-    signal top_axi_awaddr  : std_logic_vector(31 downto 0) := (others => '0');
-    signal top_axi_awprot  : std_logic_vector(2 downto 0)  := (others => '0');
+    signal top_axi_awaddr  : std_logic_vector(31 downto 0);
+    signal top_axi_awprot  : std_logic_vector(2 downto 0);
 
-    signal top_axi_wvalid  : std_logic := '0';
+    signal top_axi_wvalid  : std_logic;
     signal top_axi_wready  : std_logic;
-    signal top_axi_wdata   : std_logic_vector(31 downto 0) := (others => '0');
-    signal top_axi_wstrb   : std_logic_vector(3 downto 0)  := (others => '0');
+    signal top_axi_wdata   : std_logic_vector(31 downto 0);
+    signal top_axi_wstrb   : std_logic_vector(3 downto 0);
 
     signal top_axi_bvalid  : std_logic;
-    signal top_axi_bready  : std_logic := '0';
+    signal top_axi_bready  : std_logic;
     signal top_axi_bresp   : std_logic_vector(1 downto 0);
 
-    signal top_axi_arvalid : std_logic := '0';
+    signal top_axi_arvalid : std_logic;
     signal top_axi_arready : std_logic;
-    signal top_axi_araddr  : std_logic_vector(31 downto 0) := (others => '0');
-    signal top_axi_arprot  : std_logic_vector(2 downto 0)  := (others => '0');
+    signal top_axi_araddr  : std_logic_vector(31 downto 0);
+    signal top_axi_arprot  : std_logic_vector(2 downto 0);
 
     signal top_axi_rvalid  : std_logic;
-    signal top_axi_rready  : std_logic := '0';
+    signal top_axi_rready  : std_logic;
     signal top_axi_rdata   : std_logic_vector(31 downto 0);
     signal top_axi_rresp   : std_logic_vector(1 downto 0);
 
     -- CPU control and debug
-    signal soc_cpu_reset   : std_logic := '0';
-    signal soc_stall       : std_logic := '0';
-    signal soc_fault_i     : std_logic := '0';
+    signal soc_cpu_reset   : std_logic;
+    signal soc_stall       : std_logic;
+    signal soc_fault_i     : std_logic;
     signal soc_fault_o     : std_logic;
 
     signal soc_registers_debug   : std_logic_vector(1023 downto 0);
@@ -97,8 +92,8 @@ architecture rtl of top is
     -- Misc signals
     --------------------------------------------------------
     -- UART synchronization
-    signal uart_rxd_d1 : std_logic := '1';
-    signal uart_rxd_d2 : std_logic := '1';
+    signal uart_rxd_d1 : std_logic;
+    signal uart_rxd_d2 : std_logic;
 
     signal soft_reset : std_logic;
 
