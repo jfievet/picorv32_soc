@@ -30,9 +30,9 @@ LIB.add_source_files( ROOT / "riscv_soc_shell" /  "src" / "timestamp_pkg.vhd")
 LIB.add_source_files( ROOT / "src" / "riscv_wrapper.vhd")
 
 #Libraries
-LIB.add_source_files( ROOT / "tb" / "pkg" /"test_selection_pkg.vhd")
-LIB.add_source_files( ROOT / "tb" / "pkg" /"test_programs_pkg.vhd")
-LIB.add_source_files( ROOT / "tb" / "riscv32im_isa_tb.vhd")
+LIB.add_source_files( ROOT / "riscv_soc_shell" / "tb" / "pkg" / "test_selection_pkg.vhd")
+LIB.add_source_files( ROOT / "riscv_soc_shell" / "tb" / "pkg" / "test_programs_pkg.vhd")
+LIB.add_source_files( ROOT / "riscv_soc_shell" / "tb" / "riscv32im_isa_tb.vhd")
 
 # Modelsim options
 VU.set_sim_option('modelsim.init_files.after_load', [str(ROOT / 'sim' / 'wave_riscv32im_isa_tb.do')])
@@ -40,7 +40,7 @@ VU.set_sim_option('modelsim.vsim_flags', ["-voptargs=\"+acc\""])
 
 tb = LIB.test_bench("riscv32im_isa_tb")
 
-selection_file = ROOT / "tb" / "pkg" / "test_selection_pkg.vhd"
+selection_file = ROOT / "riscv_soc_shell" / "tb" / "pkg" / "test_selection_pkg.vhd"
 cases = re.findall(
     r"constant\s+tc_(\w+)\s*:\s*case_id_type\s*:=\s*(\d+)",
     selection_file.read_text(encoding="utf-8"),

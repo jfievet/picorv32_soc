@@ -29,7 +29,7 @@ LIB.add_source_files( ROOT / "riscv_soc_shell" /  "src" / "timestamp_pkg.vhd")
 LIB.add_source_files( ROOT / "src" / "riscv_wrapper.vhd")
 
 #Libraries
-LIB.add_source_files( ROOT / "tb" / "soc_tb.vhd")
+LIB.add_source_files( ROOT / "riscv_soc_shell" / "tb" / "soc_tb.vhd")
 
 # Modelsim options
 VU.set_sim_option('modelsim.init_files.after_load', [str(ROOT / 'sim' / 'wave_soc_tb.do')])
