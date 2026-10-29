@@ -25,6 +25,7 @@ LIB.add_source_files( ROOT / "riscv_soc_shell" / "rtl_common" /  "src" / "rams_s
 LIB.add_source_files( ROOT / "riscv_soc_shell" / "rtl_common" /  "src" / "rams_sp_wf_pkg.vhd")
 LIB.add_source_files( ROOT / "riscv_soc_shell" / "rtl_common" /  "src" / "axi_slave_reg_bank.vhd")
 LIB.add_source_files( ROOT / "riscv_soc_shell" / "rtl_common" /  "src" / "axi_slave_reg_bank_pkg.vhd")
+LIB.add_source_files( ROOT / "riscv_soc_shell" / "rtl_common" /  "src" / "time_elapsed.vhd")
 LIB.add_source_files( ROOT / "riscv_soc_shell" /  "src" / "timestamp_pkg.vhd")
 LIB.add_source_files( ROOT / "src" / "riscv_wrapper.vhd")
 
